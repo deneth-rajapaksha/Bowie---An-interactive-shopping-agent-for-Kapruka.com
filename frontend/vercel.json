@@ -3,11 +3,5 @@
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "devCommand": null,
-  "outputDirectory": null,
-  "crons": [
-    {
-      "path": "/api/admin/langfuse-retention",
-      "schedule": "0 2 * * *"
-    }
-  ]
+  "outputDirectory": null
 }
