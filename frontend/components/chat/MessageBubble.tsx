@@ -2,22 +2,32 @@
 
 import Image from "next/image";
 import { ThumbsDown, ThumbsUp } from "lucide-react";
+import { AddressConfirmationCard } from "@/components/ui/AddressConfirmationCard";
 import { CategoryGrid } from "@/components/ui/CategoryGrid";
 import { DeliveryCard } from "@/components/ui/DeliveryCard";
 import { OrderSummaryCard } from "@/components/ui/OrderSummaryCard";
 import { OrderTrackerCard } from "@/components/ui/OrderTrackerCard";
 import { ProductCarousel } from "@/components/ui/ProductCarousel";
 import { ProductDetailPanel } from "@/components/ui/ProductDetailPanel";
-import type { ChatMessage, ProductSummary } from "@/lib/types";
+import type { AddressCandidate, ChatMessage, ProductSummary } from "@/lib/types";
 
 type MessageBubbleProps = {
   message: ChatMessage;
   onAddToCart: (product: ProductSummary) => void;
   onSendMessage: (message: string) => void;
+  onConfirmAddress?: (candidate: AddressCandidate) => void;
+  onEditAddress?: () => void;
   onFeedback?: (message: ChatMessage, rating: "like" | "dislike") => void;
 };
 
-export function MessageBubble({ message, onAddToCart, onSendMessage, onFeedback }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  onAddToCart,
+  onSendMessage,
+  onConfirmAddress,
+  onEditAddress,
+  onFeedback
+}: MessageBubbleProps) {
   const isUser = message.role === "user";
 
   return (
@@ -84,6 +94,17 @@ export function MessageBubble({ message, onAddToCart, onSendMessage, onFeedback 
                   key={`${message.id}-${index}`}
                   categories={block.categories}
                   onSelect={(category) => onSendMessage(`Show me ${category.name}`)}
+                />
+              );
+            }
+
+            if (block.type === "address_confirmation") {
+              return (
+                <AddressConfirmationCard
+                  key={`${message.id}-${index}`}
+                  lookup={block.lookup}
+                  onConfirm={(candidate) => onConfirmAddress?.(candidate)}
+                  onEdit={() => onEditAddress?.()}
                 />
               );
             }

@@ -120,7 +120,11 @@ export function ProductCarousel({
             type="button"
             className={index === activeIndex ? "active" : ""}
             onClick={() => setActiveIndex(index)}
-            aria-label={`Go to product ${index + 1}`}
+            aria-label={
+              index === seeMoreIndex
+                ? "Go to more products"
+                : `Go to product ${index + 1}`
+            }
           />
         ))}
       </div>

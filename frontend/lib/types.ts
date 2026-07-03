@@ -71,6 +71,36 @@ export type TrackingResult = {
   has_delivery_video?: boolean;
 };
 
+export type AddressCandidate = {
+  placeId: string;
+  name?: string;
+  formattedAddress: string;
+  city?: string;
+  mcpAddress: string;
+  location?: {
+    lat: number;
+    lng: number;
+  };
+};
+
+export type ParsedAddressInput = {
+  searchQuery: string;
+  addressText?: string | null;
+  city?: string | null;
+  recipientName?: string | null;
+  phone?: string | null;
+  addressType?: "home" | "office" | "other" | null;
+  deliveryDate?: string | null;
+  senderName?: string | null;
+  giftMessage?: string | null;
+};
+
+export type AddressLookupResult = {
+  inputLanguage?: "sinhala" | "tamil" | null;
+  parsed: ParsedAddressInput;
+  candidates: AddressCandidate[];
+};
+
 export type RenderedBlock =
   | { type: "text"; content: string }
   | {
@@ -83,12 +113,14 @@ export type RenderedBlock =
   | { type: "delivery_check"; delivery: DeliveryResult }
   | { type: "order_summary"; order: OrderResult }
   | { type: "order_tracker"; tracking: TrackingResult }
-  | { type: "category_grid"; categories: Category[] };
+  | { type: "category_grid"; categories: Category[] }
+  | { type: "address_confirmation"; lookup: AddressLookupResult };
 
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  modelContent?: string;
   blocks?: RenderedBlock[];
   quickReplies?: string[];
   traceId?: string;
@@ -99,9 +131,12 @@ export type ChatMessage = {
 export type CartItem = {
   product_id: string;
   name: string;
+  summary?: string;
   price: number;
   currency: string;
   image_url: string | null;
   quantity: number;
+  category?: string;
+  url?: string;
   icing_text?: string;
 };

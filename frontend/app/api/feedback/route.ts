@@ -25,7 +25,7 @@ export async function POST(req: Request) {
   try {
     response = await fetch(backendFeedbackUrl, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: getBackendHeaders(),
       body: JSON.stringify(payload)
     });
   } catch (error) {
@@ -73,4 +73,11 @@ function getBackendFeedbackUrl(endpoint: string) {
   if (normalized.endsWith("/api/feedback")) return normalized;
   if (normalized.endsWith("/api/chat")) return normalized.replace(/\/api\/chat$/, "/api/feedback");
   return `${normalized}/api/feedback`;
+}
+
+function getBackendHeaders() {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const secret = process.env.BOWIE_API_SECRET?.trim();
+  if (secret) headers.authorization = `Bearer ${secret}`;
+  return headers;
 }

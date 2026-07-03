@@ -2,33 +2,66 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { ArrowUp, CirclePlus } from "lucide-react";
+import { ArrowUp, CirclePlus, GitBranch, Globe2, Settings, X } from "lucide-react";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { QuickReplyChips } from "@/components/chat/QuickReplyChips";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { CartDrawer } from "@/components/ui/CartDrawer";
 import { parseToolResults, extractQuickReplies } from "@/lib/message-renderer";
 import { formatMoney, safeId } from "@/lib/format";
-import type { CartItem, ChatMessage, ProductSummary } from "@/lib/types";
+import type { AddressCandidate, AddressLookupResult, CartItem, ChatMessage, ProductSummary } from "@/lib/types";
 
-const starterMessages: ChatMessage[] = [
-  {
-    id: "welcome",
-    role: "assistant",
-    content:
-      "Hi, I am Bowie, your Kapruka shopping guide. Tell me who you are shopping for, the occasion, city, and budget if you have one.",
-    quickReplies: ["Birthday cake", "Flowers to Colombo", "Browse categories"]
-  }
+type LanguageCode = "en" | "si" | "ta";
+
+const languageOptions: Array<{ code: LanguageCode; label: string; nativeLabel: string }> = [
+  { code: "en", label: "English", nativeLabel: "English" },
+  { code: "si", label: "Sinhala", nativeLabel: "සිංහල" },
+  { code: "ta", label: "Tamil", nativeLabel: "தமிழ்" }
 ];
 
+const starterMessagesByLanguage: Record<LanguageCode, ChatMessage> = {
+  en: {
+    id: "welcome-en",
+    role: "assistant",
+    content:
+      "Hi! I am Bowie. I can help you pick a great gift from Kapruka. Who are you shopping for? What is the occasion? Tell me the delivery city and your budget too, if you have one.",
+    quickReplies: ["Birthday cake", "Flowers to Colombo", "Browse categories"]
+  },
+  si: {
+    id: "welcome-si",
+    role: "assistant",
+    content:
+      "ආයුබෝවන්! මම Bowie. Kapruka එකෙන් හොඳම තෑග්ගක් තෝරගන්න මම ඔයාට උදව් කරන්නම්. කාටද තෑග්ගක් ගන්න හදන්නේ? මොකක්ද අවස්ථාව? ඒ වගේම ඩිලිවරි කරන්න ඕන නගරය සහ ඔයාගේ බජට් එකත් මට කියන්න.",
+    quickReplies: ["උපන්දින කේක්", "කොළඹට මල් ඩිලිවරි", "වෙනත් කාණ්ඩ බලන්න"]
+  },
+  ta: {
+    id: "welcome-ta",
+    role: "assistant",
+    content:
+      "வணக்கம்! நான் Bowie. Kapruka-ல சூப்பரான ஒரு கிஃப்ட் செலக்ட் பண்ண நான் உங்களுக்கு ஹெல்ப் பண்றேன். யாருக்கு கிஃப்ட் வாங்க போறீங்க? என்ன விசேஷம்? அப்படியே டெலிவரி பண்ண வேண்டிய சிட்டி, உங்க பட்ஜெட் என்னனு என்கிட்ட சொல்லுங்க.",
+    quickReplies: ["பிறந்தநாள் கேக்", "கொழும்புக்கு மலர்கள்", "மற்ற பிரிவுகளைப் பார்க்க"]
+  }
+};
+
+function createStarterMessages(language: LanguageCode): ChatMessage[] {
+  return [{ ...starterMessagesByLanguage[language], id: safeId(`welcome-${language}`) }];
+}
+
 export function ChatPage() {
-  const [messages, setMessages] = useState<ChatMessage[]>(starterMessages);
+  const [selectedLanguage, setSelectedLanguage] = useState<LanguageCode | null>(null);
+  const [chatLanguage, setChatLanguage] = useState<LanguageCode>("en");
+  const [messages, setMessages] = useState<ChatMessage[]>(() => createStarterMessages("en"));
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [isWakingModel, setIsWakingModel] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [conversationId, setConversationId] = useState(() => safeId("conversation"));
+  const [pendingAddressLookup, setPendingAddressLookup] = useState<{
+    originalMessage: string;
+    lookup: AddressLookupResult;
+  } | null>(null);
   const [pendingDislike, setPendingDislike] = useState<{
     traceId: string;
     conversationId?: string;
@@ -40,6 +73,11 @@ export function ChatPage() {
   const cartCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart]);
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + item.price * item.quantity, 0), [cart]);
   const cartCurrency = cart[0]?.currency || "LKR";
+  const hasEnteredChat = selectedLanguage !== null;
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = "light";
+  }, []);
 
   useEffect(() => {
     if (!isSending) {
@@ -61,15 +99,62 @@ export function ChatPage() {
     });
   }, [messages, isSending]);
 
-  async function sendMessage(rawMessage: string) {
+  function selectLanguage(language: LanguageCode) {
+    setSelectedLanguage(language);
+    setChatLanguage(language);
+    setMessages(createStarterMessages(language));
+    setConversationId(safeId("conversation"));
+    setPendingAddressLookup(null);
+    setPendingDislike(null);
+  }
+
+  function changeChatLanguage(language: LanguageCode) {
+    setChatLanguage(language);
+    setSelectedLanguage((current) => current ?? language);
+
+    const hasUserMessages = messages.some((message) => message.role === "user");
+    if (!hasUserMessages) {
+      setMessages(createStarterMessages(language));
+    }
+  }
+
+  async function sendMessage(
+    rawMessage: string,
+    options: { displayMessage?: string; skipAddressLookup?: boolean } = {}
+  ) {
     const message = rawMessage.trim();
     if (!message || isSending) return;
 
     const userMessage: ChatMessage = {
       id: safeId("user"),
       role: "user",
-      content: message
+      content: options.displayMessage ?? message,
+      modelContent: options.displayMessage ? message : undefined
     };
+
+    if (isAddToCartIntent(message)) {
+      const product = findProductForAddIntent(messages, message);
+
+      setMessages((current) => [
+        ...current,
+        userMessage,
+        {
+          id: safeId("assistant"),
+          role: "assistant",
+          content: product
+            ? `Added ${product.name} to your cart. You can keep browsing or proceed to checkout when you are ready.`
+            : "I could not find a product card to add yet. Pick a product card first, then I can add it to your cart.",
+          quickReplies: product ? ["Proceed to checkout", "See similar", "Add another item"] : ["Browse categories", "Search cakes", "View top result"]
+        }
+      ]);
+      setInput("");
+
+      if (product) {
+        addProduct(product);
+      }
+
+      return;
+    }
 
     if (pendingDislike) {
       const snapshot = [...messages, userMessage];
@@ -120,6 +205,64 @@ export function ChatPage() {
       return;
     }
 
+    if (!options.skipAddressLookup && shouldSaveRomanizedCheckoutAddress(message, chatLanguage, messages, cart)) {
+      void sendMessage(buildDirectAddressConfirmedMessage(message), {
+        displayMessage: message,
+        skipAddressLookup: true
+      });
+      return;
+    }
+
+    if (!options.skipAddressLookup && shouldStartLocalizedAddressLookup(message, chatLanguage, messages, cart)) {
+      setMessages((current) => [...current, userMessage]);
+      setInput("");
+      setIsSending(true);
+
+      try {
+        const lookup = await lookupLocalizedAddress(message, chatLanguage);
+
+        if (!lookup.candidates.length) {
+          setMessages((current) => [
+            ...current,
+            {
+              id: safeId("assistant"),
+              role: "assistant",
+              content:
+                "I could not find that address in Google Places. Please retype the delivery address with the nearest town or landmark."
+            }
+          ]);
+          return;
+        }
+
+        setPendingAddressLookup({ originalMessage: message, lookup });
+        setMessages((current) => [
+          ...current,
+          {
+            id: safeId("assistant"),
+            role: "assistant",
+            content: "I found these matching addresses. Please confirm the correct one before I continue checkout.",
+            blocks: [{ type: "address_confirmation", lookup }]
+          }
+        ]);
+      } catch (error) {
+        setMessages((current) => [
+          ...current,
+          {
+            id: safeId("assistant"),
+            role: "assistant",
+            content:
+              error instanceof Error
+                ? error.message
+                : "I could not confirm that address right now. Please try again in English or include a nearby town."
+          }
+        ]);
+      } finally {
+        setIsSending(false);
+      }
+
+      return;
+    }
+
     setMessages((current) => [...current, userMessage]);
     setInput("");
     setIsSending(true);
@@ -132,7 +275,8 @@ export function ChatPage() {
           message,
           messages: buildModelMessages([...messages, userMessage]),
           conversationId,
-          cart
+          cart,
+          language: chatLanguage
         })
       });
 
@@ -159,6 +303,7 @@ export function ChatPage() {
         id: safeId("assistant"),
         role: "assistant",
         content: quickReplyData.clean,
+        modelContent: text,
         blocks: parseToolResults(payload.toolResults),
         quickReplies: payload.quickReplies ?? quickReplyData.chips,
         traceId: payload.traceId,
@@ -189,6 +334,22 @@ export function ChatPage() {
     void sendMessage(input);
   }
 
+  function confirmLocalizedAddress(candidate: AddressCandidate) {
+    if (!pendingAddressLookup) return;
+
+    const confirmedMessage = buildConfirmedAddressMessage(pendingAddressLookup.lookup, candidate);
+    setPendingAddressLookup(null);
+    void sendMessage(confirmedMessage, {
+      displayMessage: `Use this address: ${candidate.mcpAddress || candidate.formattedAddress}`,
+      skipAddressLookup: true
+    });
+  }
+
+  function editLocalizedAddress() {
+    setPendingAddressLookup(null);
+    setInput(pendingAddressLookup?.originalMessage ?? "");
+  }
+
   function addProduct(product: ProductSummary) {
     setCart((current) => {
       const existing = current.find((item) => item.product_id === product.id);
@@ -203,9 +364,12 @@ export function ChatPage() {
         {
           product_id: product.id,
           name: product.name,
+          summary: product.summary,
           price: product.price.amount,
           currency: product.price.currency,
           image_url: product.image_url,
+          category: typeof product.category === "string" ? product.category : "",
+          url: product.url,
           quantity: 1
         }
       ];
@@ -277,109 +441,289 @@ export function ChatPage() {
   const latestQuickReplies = messages.at(-1)?.quickReplies ?? [];
 
   return (
-    <main className="chat-shell">
-      <aside className="side-rail" aria-label="Bowie navigation">
-        <div className="brand-lockup">
-          <Image src="/bowie_ai_mascot_logo.png" alt="Bowie mascot" width={34} height={34} priority />
-          <div>
+    <main className={`experience-frame ${hasEnteredChat ? "show-chat" : ""}`}>
+      <section className="intro-screen" aria-label="Choose language">
+        <nav className="intro-nav" aria-label="Bowie links">
+          <div className="intro-logo">
+            <Image src="/bowie_ai_mascot_logo.png" alt="Bowie mascot" width={34} height={34} priority />
             <strong>Bowie</strong>
-            <span>Organic Guide</span>
+          </div>
+          <div className="intro-links">
+            <a
+              href="https://github.com/deneth-rajapaksha/Bowie---An-interactive-shopping-agent-for-Kapruka.com"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <GitBranch size={17} strokeWidth={2} aria-hidden="true" />
+              <span>GitHub Repo</span>
+            </a>
+            <a href="https://www.denethrajapaksha.com" target="_blank" rel="noreferrer">
+              <Globe2 size={17} strokeWidth={2} aria-hidden="true" />
+              <span>Portfolio</span>
+            </a>
+            <button className="intro-settings-button" type="button" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
+              <Settings size={18} strokeWidth={2} aria-hidden="true" />
+            </button>
+          </div>
+        </nav>
+
+        <div className="intro-hero">
+          <div className="intro-media" aria-hidden="true">
+            <img className="intro-branch-image" src="/bowie-branch-mascot.png" alt="" />
+          </div>
+
+          <div className="intro-copy">
+            <p className="intro-kicker">Interactive AI Agentic Shopping Experience</p>
+            <h1>
+              Your Wish,
+              <span>Through Our Branch.</span>
+            </h1>
+            <p>
+              Kapruka is Inspired from a wish granting the Project Bowie is a conversational shopping assistant for
+              Kapruka. Inspired by the main branch of a tree, Bowie represents the connection that reaches toward you,
+              understands your wishes, and turns them into reality. Click the language you want to continue.
+            </p>
+            <div className="language-buttons" aria-label="Language choices">
+              {languageOptions.map((language) => (
+                <button
+                  key={language.code}
+                  type="button"
+                  aria-label={language.label}
+                  onClick={() => selectLanguage(language.code)}
+                >
+                  <span>{language.nativeLabel}</span>
+                  {language.nativeLabel !== language.label ? <small>{language.label}</small> : null}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
+      </section>
 
-        <button
-          className="new-chat-button"
-          type="button"
-          onClick={() => {
-            setMessages(starterMessages);
-            setConversationId(safeId("conversation"));
-            setPendingDislike(null);
-          }}
-        >
-          <span aria-hidden="true">+</span>
-          Start New Chat
-        </button>
+      <section className="chat-screen" aria-label="Bowie chat">
+        <div className="chat-shell">
+          <aside className="side-rail" aria-label="Bowie navigation">
+            <div className="brand-lockup">
+              <Image src="/bowie_ai_mascot_logo.png" alt="Bowie mascot" width={34} height={34} priority />
+              <div>
+                <strong>Bowie</strong>
+                <span>Organic Guide</span>
+              </div>
+            </div>
 
-        <section className="mini-cart-card" aria-label="Cart summary">
-          <div className="mini-cart-title">Your Cart</div>
-          <div>
-            <span>
-              {cartCount || 0} item{cartCount === 1 ? "" : "s"}
-            </span>
-            <strong>{formatMoney({ amount: cartTotal, currency: cartCurrency })}</strong>
+            <button
+              className="new-chat-button"
+              type="button"
+              onClick={() => {
+                setMessages(createStarterMessages(chatLanguage));
+                setConversationId(safeId("conversation"));
+                setPendingAddressLookup(null);
+                setPendingDislike(null);
+              }}
+            >
+              <span aria-hidden="true">+</span>
+              Start New Chat
+            </button>
+
+            <section className="mini-cart-card" aria-label="Cart summary">
+              <div className="mini-cart-title">Your Cart</div>
+              <div>
+                <span>
+                  {cartCount || 0} item{cartCount === 1 ? "" : "s"}
+                </span>
+                <strong>{formatMoney({ amount: cartTotal, currency: cartCurrency })}</strong>
+              </div>
+              <button type="button" onClick={() => setCartOpen(true)}>
+                View Cart
+              </button>
+            </section>
+
+            <button className="settings-button" type="button" onClick={() => setSettingsOpen(true)}>
+              <Settings size={17} strokeWidth={2} aria-hidden="true" />
+              Settings
+            </button>
+          </aside>
+
+          <div className="chat-main">
+            <header className="top-bar">
+              <div>
+                <strong>Bowie</strong>
+                <span>Kapruka shopping chat</span>
+              </div>
+              <div className="top-actions">
+                <button className="icon-button" type="button" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
+                  <Settings size={18} strokeWidth={2} aria-hidden="true" />
+                </button>
+                <button className="cart-button" type="button" onClick={() => setCartOpen(true)} aria-label="Open cart">
+                  <span aria-hidden="true">Cart</span>
+                  <b>{cartCount}</b>
+                </button>
+              </div>
+            </header>
+
+            <section ref={messageScrollRef} className="message-scroll" aria-live="polite">
+              <div className="message-stack">
+                {messages.map((message) => (
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    onAddToCart={addProduct}
+                    onSendMessage={sendMessage}
+                    onConfirmAddress={confirmLocalizedAddress}
+                    onEditAddress={editLocalizedAddress}
+                    onFeedback={handleFeedback}
+                  />
+                ))}
+                {isSending ? <TypingIndicator isWaking={isWakingModel} /> : null}
+              </div>
+            </section>
+
+            <footer className="input-panel">
+              <QuickReplyChips chips={latestQuickReplies} onSelect={sendMessage} disabled={isSending} />
+              <form className="input-bar" onSubmit={handleSubmit}>
+                <button className="input-tool-button" type="button" aria-label="Add more context">
+                  <CirclePlus size={22} strokeWidth={1.8} aria-hidden="true" />
+                </button>
+                <label className="sr-only" htmlFor="bowie-input">
+                  Message Bowie
+                </label>
+                <input
+                  id="bowie-input"
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  placeholder="Ask Bowie anything about Kapruka..."
+                  disabled={isSending}
+                />
+                <button className="input-send-button" type="submit" disabled={isSending || input.trim().length === 0}>
+                  <ArrowUp size={22} strokeWidth={2.4} aria-hidden="true" />
+                </button>
+              </form>
+            </footer>
+
+            <CartDrawer
+              open={cartOpen}
+              cart={cart}
+              onClose={() => setCartOpen(false)}
+              onUpdateQuantity={updateQuantity}
+              onCheckout={() => {
+                setCartOpen(false);
+                void sendMessage("Proceed to checkout");
+              }}
+            />
           </div>
-          <button type="button" onClick={() => setCartOpen(true)}>
-            View Cart
-          </button>
-        </section>
+        </div>
+      </section>
 
-        <button className="settings-button" type="button">
-          Settings
-        </button>
-      </aside>
+      <SettingsDialog
+        open={settingsOpen}
+        language={chatLanguage}
+        onClose={() => setSettingsOpen(false)}
+        onLanguageChange={changeChatLanguage}
+      />
+    </main>
+  );
+}
 
-      <div className="chat-main">
-        <header className="top-bar">
+function SettingsDialog({
+  open,
+  language,
+  onClose,
+  onLanguageChange
+}: {
+  open: boolean;
+  language: LanguageCode;
+  onClose: () => void;
+  onLanguageChange: (language: LanguageCode) => void;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="settings-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <section className="settings-panel">
+        <header className="settings-header">
           <div>
-            <strong>Bowie</strong>
-            <span>Kapruka shopping chat</span>
+            <h2 id="settings-title">Settings</h2>
+            <p>Choose how Bowie looks and speaks.</p>
           </div>
-          <button className="cart-button" type="button" onClick={() => setCartOpen(true)} aria-label="Open cart">
-            <span aria-hidden="true">Cart</span>
-            <b>{cartCount}</b>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="Close settings">
+            <X size={19} strokeWidth={2} aria-hidden="true" />
           </button>
         </header>
 
-        <section ref={messageScrollRef} className="message-scroll" aria-live="polite">
-          <div className="message-stack">
-            {messages.map((message) => (
-              <MessageBubble
-                key={message.id}
-                message={message}
-                onAddToCart={addProduct}
-                onSendMessage={sendMessage}
-                onFeedback={handleFeedback}
-              />
-            ))}
-            {isSending ? <TypingIndicator isWaking={isWakingModel} /> : null}
+        <div className="settings-section">
+          <h3>Appearance</h3>
+          <div className="segmented-control" role="group" aria-label="Theme mode locked">
+            <button type="button" className="active" disabled>
+              Light
+            </button>
+            <button type="button" disabled>
+              Dark
+            </button>
           </div>
-        </section>
+        </div>
 
-        <footer className="input-panel">
-          <QuickReplyChips chips={latestQuickReplies} onSelect={sendMessage} disabled={isSending} />
-          <form className="input-bar" onSubmit={handleSubmit}>
-            <button className="input-tool-button" type="button" aria-label="Add more context">
-              <CirclePlus size={22} strokeWidth={1.8} aria-hidden="true" />
-            </button>
-            <label className="sr-only" htmlFor="bowie-input">
-              Message Bowie
-            </label>
-            <input
-              id="bowie-input"
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="Ask Bowie anything about your home office..."
-              disabled={isSending}
-            />
-            <button className="input-send-button" type="submit" disabled={isSending || input.trim().length === 0}>
-              <ArrowUp size={22} strokeWidth={2.4} aria-hidden="true" />
-            </button>
-          </form>
-        </footer>
+        <div className="settings-section">
+          <h3>Language</h3>
+          <div className="segmented-control language-control" role="group" aria-label="Chat language">
+            {languageOptions.map((option) => (
+              <button
+                key={option.code}
+                type="button"
+                className={language === option.code ? "active" : ""}
+                onClick={() => onLanguageChange(option.code)}
+              >
+                <span>{option.nativeLabel}</span>
+                {option.nativeLabel !== option.label ? <small>{option.label}</small> : null}
+              </button>
+            ))}
+          </div>
+        </div>
 
-        <CartDrawer
-          open={cartOpen}
-          cart={cart}
-          onClose={() => setCartOpen(false)}
-          onUpdateQuantity={updateQuantity}
-          onCheckout={() => {
-            setCartOpen(false);
-            void sendMessage("Proceed to checkout");
-          }}
-        />
-      </div>
-    </main>
+        <div className="settings-section privacy-note">
+          <h3>Privacy Policy</h3>
+          <p>
+            We do not collect or sell user data. Normal conversations are not used to identify you. If a response is
+            marked unsatisfied, that trace and your feedback note may be checked by admins so the answer can be reviewed
+            and improved.
+          </p>
+        </div>
+      </section>
+    </div>
   );
+}
+
+function isAddToCartIntent(message: string) {
+  const normalized = message.trim().toLowerCase();
+  return (
+    /\badd\b/.test(normalized) && /\b(cart|it|this|that|card|number|one|two|three|four|1|2|3|4)\b/.test(normalized)
+  ) || /\bcart\s+(it|this|that|card|number|\d+)\b/.test(normalized);
+}
+
+function findProductForAddIntent(messages: ChatMessage[], request: string): ProductSummary | null {
+  const requestedIndex = getRequestedCardIndex(request);
+
+  for (const message of [...messages].reverse()) {
+    const blocks = message.blocks ?? [];
+    for (const block of [...blocks].reverse()) {
+      if (block.type === "product_detail") return block.product;
+      if (block.type === "product_list" && block.products.length) {
+        return block.products[requestedIndex] ?? block.products[0];
+      }
+    }
+  }
+
+  return null;
+}
+
+function getRequestedCardIndex(request: string) {
+  const normalized = request.toLowerCase();
+  const explicit = normalized.match(/\b(?:card|number|no\.?)\s*(\d+)\b/);
+  if (explicit) return Math.max(0, Number(explicit[1]) - 1);
+
+  if (/\b(second|two|2)\b/.test(normalized)) return 1;
+  if (/\b(third|three|3)\b/.test(normalized)) return 2;
+  if (/\b(fourth|four|4)\b/.test(normalized)) return 3;
+  return 0;
 }
 
 function buildModelMessages(messages: ChatMessage[]) {
@@ -390,8 +734,9 @@ function buildModelMessages(messages: ChatMessage[]) {
 }
 
 function appendProductCardContext(message: ChatMessage) {
+  const content = message.modelContent ?? message.content;
   const productBlocks = message.blocks?.filter((block) => block.type === "product_list") ?? [];
-  if (!productBlocks.length) return message.content;
+  if (!productBlocks.length) return content;
 
   const productContext = productBlocks
     .flatMap((block, blockIndex) => {
@@ -411,7 +756,109 @@ function appendProductCardContext(message: ChatMessage) {
     })
     .join("\n");
 
-  return `${message.content}\n\n<!--PRODUCT_CONTEXT:\nProduct cards shown to the user:\n${productContext}\n-->`;
+  return `${content}\n\n<!--PRODUCT_CONTEXT:\nProduct cards shown to the user:\n${productContext}\n-->`;
+}
+
+function shouldStartLocalizedAddressLookup(message: string, _language: LanguageCode, messages: ChatMessage[], cart: CartItem[]) {
+  if (!cart.length || message.includes("<!--ADDRESS_CONFIRMED")) return false;
+  if (!isAwaitingCheckoutAddress(messages)) return false;
+  if (_language !== "si" && _language !== "ta") return false;
+  return containsSinhalaOrTamilScript(message);
+}
+
+function shouldSaveRomanizedCheckoutAddress(
+  message: string,
+  language: LanguageCode,
+  messages: ChatMessage[],
+  cart: CartItem[]
+) {
+  if (!cart.length || language === "en") return false;
+  if (!isAwaitingCheckoutAddress(messages)) return false;
+  if (containsSinhalaOrTamilScript(message)) return false;
+  return message.trim().length >= 5;
+}
+
+function isAwaitingCheckoutAddress(messages: ChatMessage[]) {
+  const latestAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+  return Boolean(latestAssistant && /<!--CHECKOUT_ADDRESS_REQUESTED-->/.test(latestAssistant.modelContent ?? latestAssistant.content));
+}
+
+function containsSinhalaOrTamilScript(value: string) {
+  return /[\u0D80-\u0DFF\u0B80-\u0BFF]/.test(value);
+}
+
+function detectAddressLanguage(message: string, fallback: LanguageCode) {
+  const sinhalaCount = Array.from(message.matchAll(/[\u0D80-\u0DFF]/g)).length;
+  const tamilCount = Array.from(message.matchAll(/[\u0B80-\u0BFF]/g)).length;
+  if (sinhalaCount || tamilCount) return sinhalaCount >= tamilCount ? "sinhala" : "tamil";
+  return fallback === "ta" ? "tamil" : "sinhala";
+}
+
+async function lookupLocalizedAddress(message: string, language: LanguageCode) {
+  const response = await fetch("/api/address", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      text: message,
+      language: detectAddressLanguage(message, language)
+    })
+  });
+
+  if (!response.ok) {
+    const detail = await readErrorDetail(response);
+    throw new Error(detail || "Address lookup failed.");
+  }
+
+  return (await response.json()) as AddressLookupResult;
+}
+
+function buildConfirmedAddressMessage(lookup: AddressLookupResult, candidate: AddressCandidate) {
+  const parsed = lookup.parsed;
+  const city = candidate.city || parsed.city || "";
+  const address = appendCityToAddress(candidate.mcpAddress || candidate.formattedAddress, city);
+  const lines = [
+    `Delivery Address: ${address}`,
+    city ? `City: ${city}` : ""
+  ].filter(Boolean);
+
+  return `${lines.join("\n")}\n\n<!--ADDRESS_CONFIRMED: Google Places place_id=${
+    candidate.placeId
+  }; use this clean English delivery.address and delivery.city for Kapruka MCP. Ignore any earlier unconfirmed Sinhala/Tamil address text.-->`;
+}
+
+function buildDirectAddressConfirmedMessage(address: string) {
+  const normalizedAddress = address.replace(/\s+/g, " ").trim();
+  const city = extractCityFromRomanizedAddress(normalizedAddress);
+  const lines = [
+    `Delivery Address: ${normalizedAddress}`,
+    city ? `City: ${city}` : ""
+  ].filter(Boolean);
+
+  return `${lines.join("\n")}\n\n<!--ADDRESS_CONFIRMED: User provided English/romanized address directly; use this delivery.address${
+    city ? " and delivery.city" : ""
+  } for Kapruka MCP. Do not run Google Places again for this address.-->`;
+}
+
+function appendCityToAddress(address: string, city: string) {
+  const cleanAddress = address.replace(/\s+/g, " ").trim();
+  const cleanCity = city.replace(/\s+/g, " ").trim();
+  if (!cleanCity) return cleanAddress;
+  if (new RegExp(`(?:^|,\\s*)${escapeRegExp(cleanCity)}$`, "i").test(cleanAddress)) return cleanAddress;
+  return `${cleanAddress}, ${cleanCity}`;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractCityFromRomanizedAddress(address: string) {
+  const parts = address
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return "";
+  const city = parts.at(-1) || "";
+  return /\d/.test(city) && city.length > 20 ? "" : city;
 }
 
 async function readErrorDetail(response: Response) {
@@ -439,6 +886,10 @@ function cleanErrorText(text: string) {
     .replace(/\s+/g, " ")
     .trim();
 
+  if (/fetch failed|error executing tool kapruka_search_products/i.test(withoutHtml)) {
+    return "I could not reach Kapruka product search right now. Please try again in a moment.";
+  }
+
   return withoutHtml.length > 400 ? `${withoutHtml.slice(0, 397).trim()}...` : withoutHtml;
 }
 
@@ -447,6 +898,7 @@ function compactMessage(message: ChatMessage) {
     id: message.id,
     role: message.role,
     content: message.content,
+    modelContent: message.modelContent,
     blocks: message.blocks,
     quickReplies: message.quickReplies,
     traceId: message.traceId,

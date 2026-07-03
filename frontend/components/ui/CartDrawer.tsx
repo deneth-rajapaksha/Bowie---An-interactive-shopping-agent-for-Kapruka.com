@@ -33,7 +33,14 @@ export function CartDrawer({ open, cart, onClose, onUpdateQuantity, onCheckout }
               </div>
               <div>
                 <h3>{item.name}</h3>
+                {item.category ? <span className="cart-item-meta">{item.category}</span> : null}
                 <p>{formatMoney({ amount: item.price, currency: item.currency })}</p>
+                {item.summary ? <p className="cart-item-summary">{item.summary}</p> : null}
+                {item.url ? (
+                  <a className="cart-item-link" href={item.url} target="_blank" rel="noreferrer">
+                    View product
+                  </a>
+                ) : null}
                 <div className="quantity-row">
                   <button type="button" onClick={() => onUpdateQuantity(item.product_id, item.quantity - 1)}>
                     -

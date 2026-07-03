@@ -8,7 +8,16 @@ type ChatRequest = {
   messages?: Array<{ role: string; content: string }>;
   conversationId?: string;
   userId?: string;
-  cart?: unknown;
+  cart?: MockCartItem[];
+  language?: "en" | "si" | "ta";
+};
+
+type MockCartItem = {
+  product_id?: string;
+  name?: string;
+  quantity?: number;
+  price?: number;
+  currency?: string;
 };
 
 export async function POST(req: Request) {
@@ -22,13 +31,14 @@ export async function POST(req: Request) {
     try {
       response = await fetch(backendChatUrl, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: getBackendHeaders(),
         body: JSON.stringify({
           messages: body.messages ?? [],
           responseFormat: "json",
           conversationId: body.conversationId,
           userId: body.userId,
-          cart: body.cart
+          cart: body.cart,
+          language: body.language
         })
       });
     } catch (error) {
@@ -90,13 +100,20 @@ export async function POST(req: Request) {
   }
 
   const latest = (body.message || body.messages?.at(-1)?.content || "").toLowerCase();
-  const payload = mockReply(latest);
+  const payload = mockReply(latest, Array.isArray(body.cart) ? body.cart : []);
   return NextResponse.json(payload);
 }
 
 function getBackendChatUrl(endpoint: string) {
   const normalized = endpoint.replace(/\/$/, "");
   return normalized.endsWith("/api/chat") ? normalized : `${normalized}/api/chat`;
+}
+
+function getBackendHeaders() {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const secret = process.env.BOWIE_API_SECRET?.trim();
+  if (secret) headers.authorization = `Bearer ${secret}`;
+  return headers;
 }
 
 function parseAiSdkDataStreamText(rawBody: string) {
@@ -165,8 +182,19 @@ function limitErrorText(text: string) {
   return clean.length > 400 ? `${clean.slice(0, 397).trim()}...` : clean;
 }
 
-function mockReply(message: string) {
-  if (message.includes("track") || message.includes("order")) {
+function mockReply(message: string, cart: MockCartItem[]) {
+  if (isCheckoutIntent(message)) {
+    const itemLabel = cart.length
+      ? `${cart.length} item${cart.length === 1 ? "" : "s"} from your cart`
+      : "the selected item";
+
+    return {
+      text: `Great, I will use ${itemLabel} for checkout. I can create the Kapruka checkout once the recipient name, phone, delivery address, city, delivery date, and sender name are confirmed. <!--QUICK_REPLIES:["Add gift message","Change recipient","Confirm details"]-->`,
+      toolResults: [{ name: "kapruka_create_order", result: sampleOrder }]
+    };
+  }
+
+  if (isTrackingIntent(message)) {
     return {
       text: "I found the latest order status for you.",
       toolResults: [{ name: "kapruka_track_order", result: sampleTracking }],
@@ -178,13 +206,6 @@ function mockReply(message: string) {
     return {
       text: "Colombo delivery is available for the selected date. The flat delivery rate is shown below. <!--QUICK_REPLIES:[\"Proceed to checkout\",\"Change date\",\"Add another item\"]-->",
       toolResults: [{ name: "kapruka_check_delivery", result: sampleDelivery }]
-    };
-  }
-
-  if (message.includes("checkout") || message.includes("pay")) {
-    return {
-      text: "I can create a Kapruka checkout link once the recipient details are confirmed. Here is how the payment step will look. <!--QUICK_REPLIES:[\"Change recipient\",\"Add gift message\",\"Track an order\"]-->",
-      toolResults: [{ name: "kapruka_create_order", result: sampleOrder }]
     };
   }
 
@@ -203,7 +224,15 @@ function mockReply(message: string) {
   }
 
   return {
-    text: "Lovely, I found a few giftable options. The chocolate cake is the safest birthday pick, and the roses are better if you want something classic. <!--QUICK_REPLIES:[\"View top result\",\"Check delivery to Colombo\",\"Browse categories\"]-->",
+    text: "Lovely, I found a few giftable options. The chocolate cake is the safest birthday pick, and it pairs well with flowers, chocolates, or a soft toy if you want the gift to feel fuller. <!--QUICK_REPLIES:[\"View top result\",\"Check delivery to Colombo\",\"Browse categories\"]-->",
     toolResults: [{ name: "kapruka_search_products", result: { results: sampleProducts } }]
   };
+}
+
+function isCheckoutIntent(message: string) {
+  return /\b(checkout|proceed|pay|place\s+order|create\s+order|confirm\s+order)\b/i.test(message);
+}
+
+function isTrackingIntent(message: string) {
+  return /\b(track|tracking|order\s+status|where\s+is\s+my\s+order|order\s*(no|number|#))\b/i.test(message);
 }

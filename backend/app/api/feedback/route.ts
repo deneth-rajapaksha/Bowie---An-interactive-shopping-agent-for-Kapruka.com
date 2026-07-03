@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { scoreConversationFeedback } from "@/lib/observability/langfuse";
 import { sendUnsatisfiedConversationAlert } from "@/lib/notifications/admin-alert";
+import { requireBackendAccess } from "@/lib/security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +22,12 @@ const DISLIKE_REASON_PROMPT =
   "I am sorry that missed the mark. If possible, could you share what went wrong or what you expected instead? Your note goes straight to an admin so we can improve Bowie.";
 
 export async function POST(req: Request) {
+  const accessDenied = await requireBackendAccess(req, {
+    route: "feedback",
+    requireSecretInProduction: true
+  });
+  if (accessDenied) return accessDenied;
+
   const parsed = feedbackSchema.safeParse(await req.json());
 
   if (!parsed.success) {
