@@ -100,7 +100,7 @@ export async function POST(req: Request) {
   }
 
   const latest = (body.message || body.messages?.at(-1)?.content || "").toLowerCase();
-  const payload = mockReply(latest, Array.isArray(body.cart) ? body.cart : []);
+  const payload = mockReply(latest, Array.isArray(body.cart) ? body.cart : [], body.language);
   return NextResponse.json(payload);
 }
 
@@ -182,21 +182,31 @@ function limitErrorText(text: string) {
   return clean.length > 400 ? `${clean.slice(0, 397).trim()}...` : clean;
 }
 
-function mockReply(message: string, cart: MockCartItem[]) {
+function mockReply(message: string, cart: MockCartItem[], language: ChatRequest["language"] = "en") {
   if (isCheckoutIntent(message)) {
     const itemLabel = cart.length
       ? `${cart.length} item${cart.length === 1 ? "" : "s"} from your cart`
       : "the selected item";
 
     return {
-      text: `Great, I will use ${itemLabel} for checkout. I can create the Kapruka checkout once the recipient name, phone, delivery address, city, delivery date, and sender name are confirmed. <!--QUICK_REPLIES:["Add gift message","Change recipient","Confirm details"]-->`,
+      text: localizedMockText(
+        language,
+        `Great, I will use ${itemLabel} for checkout. I can create the Kapruka checkout once the recipient name, phone, delivery address, city, delivery date, and sender name are confirmed. <!--QUICK_REPLIES:["Add gift message","Change recipient","Confirm details"]-->`,
+        `හරි, checkout එකට ${itemLabel} භාවිතා කරන්නම්. Recipient name, phone, delivery address, city, delivery date, sender name confirm වුණාම checkout එක හදන්න පුළුවන්. <!--QUICK_REPLIES:["Gift message add කරන්න","Recipient වෙනස් කරන්න","Details confirm කරන්න"]-->`,
+        `சரி, checkout-க்கு ${itemLabel} பயன்படுத்துகிறேன். Recipient name, phone, delivery address, city, delivery date, sender name confirm ஆனதும் checkout உருவாக்கலாம். <!--QUICK_REPLIES:["Gift message add செய்ய","Recipient மாற்ற","Details confirm செய்ய"]-->`
+      ),
       toolResults: [{ name: "kapruka_create_order", result: sampleOrder }]
     };
   }
 
   if (isTrackingIntent(message)) {
     return {
-      text: "I found the latest order status for you.",
+      text: localizedMockText(
+        language,
+        "I found the latest order status for you.",
+        "ඔයාගේ order එකේ latest status එක හමු වුණා.",
+        "உங்கள் order-இன் latest status கிடைத்தது."
+      ),
       toolResults: [{ name: "kapruka_track_order", result: sampleTracking }],
       quickReplies: []
     };
@@ -204,29 +214,55 @@ function mockReply(message: string, cart: MockCartItem[]) {
 
   if (message.includes("deliver") || message.includes("colombo")) {
     return {
-      text: "Colombo delivery is available for the selected date. The flat delivery rate is shown below. <!--QUICK_REPLIES:[\"Proceed to checkout\",\"Change date\",\"Add another item\"]-->",
+      text: localizedMockText(
+        language,
+        "Colombo delivery is available for the selected date. The flat delivery rate is shown below. <!--QUICK_REPLIES:[\"Proceed to checkout\",\"Change date\",\"Add another item\"]-->",
+        "තෝරපු දිනට Colombo delivery තියෙනවා. Flat delivery rate එක පහළින් තියෙනවා. <!--QUICK_REPLIES:[\"Checkout යන්න\",\"Date වෙනස් කරන්න\",\"තව item එකක් add කරන්න\"]-->",
+        "தேர்ந்தெடுத்த தேதிக்கு Colombo delivery கிடைக்கும். Flat delivery rate கீழே உள்ளது. <!--QUICK_REPLIES:[\"Checkout போக\",\"Date மாற்ற\",\"இன்னொரு item add செய்ய\"]-->"
+      ),
       toolResults: [{ name: "kapruka_check_delivery", result: sampleDelivery }]
     };
   }
 
   if (message.includes("category") || message.includes("browse")) {
     return {
-      text: "Here are good Kapruka categories to start with. <!--QUICK_REPLIES:[\"Birthday gifts\",\"Flowers under 6000\",\"Chocolate gifts\"]-->",
+      text: localizedMockText(
+        language,
+        "Here are good Kapruka categories to start with. <!--QUICK_REPLIES:[\"Birthday gifts\",\"Flowers under 6000\",\"Chocolate gifts\"]-->",
+        "පටන් ගන්න හොඳ Kapruka categories කිහිපයක් මෙන්න. <!--QUICK_REPLIES:[\"Birthday gifts\",\"6000ට අඩු flowers\",\"Chocolate gifts\"]-->",
+        "தொடங்க நல்ல Kapruka categories இதோ. <!--QUICK_REPLIES:[\"Birthday gifts\",\"6000க்கு கீழ் flowers\",\"Chocolate gifts\"]-->"
+      ),
       toolResults: [{ name: "kapruka_list_categories", result: { categories: sampleCategories } }]
     };
   }
 
   if (message.includes("details") || message.includes("view")) {
     return {
-      text: "The Chocolate Ganache Birthday Cake is a strong pick for a family celebration. <!--QUICK_REPLIES:[\"Check delivery\",\"Add to cart\",\"See similar cakes\"]-->",
+      text: localizedMockText(
+        language,
+        "The Chocolate Ganache Birthday Cake is a strong pick for a family celebration. <!--QUICK_REPLIES:[\"Check delivery\",\"Add to cart\",\"See similar cakes\"]-->",
+        "Family celebration එකකට Chocolate Ganache Birthday Cake එක හොඳ තේරීමක්. <!--QUICK_REPLIES:[\"Delivery check කරන්න\",\"Cart එකට add කරන්න\",\"Similar cakes බලන්න\"]-->",
+        "Family celebration-க்கு Chocolate Ganache Birthday Cake நல்ல தேர்வு. <!--QUICK_REPLIES:[\"Delivery check செய்ய\",\"Cart-க்கு add செய்ய\",\"Similar cakes பார்க்க\"]-->"
+      ),
       toolResults: [{ name: "kapruka_get_product", result: sampleProductDetail }]
     };
   }
 
   return {
-    text: "Lovely, I found a few giftable options. The chocolate cake is the safest birthday pick, and it pairs well with flowers, chocolates, or a soft toy if you want the gift to feel fuller. <!--QUICK_REPLIES:[\"View top result\",\"Check delivery to Colombo\",\"Browse categories\"]-->",
+    text: localizedMockText(
+      language,
+      "Lovely, I found a few giftable options. The chocolate cake is the safest birthday pick, and it pairs well with flowers, chocolates, or a soft toy if you want the gift to feel fuller. <!--QUICK_REPLIES:[\"View top result\",\"Check delivery to Colombo\",\"Browse categories\"]-->",
+      "නියමයි, gift කරන්න හොඳ options කිහිපයක් හමු වුණා. Birthday එකකට chocolate cake එක safe pick එකක්. Flowers, chocolates, soft toy එකක් එක්කත් හොඳට match වෙනවා. <!--QUICK_REPLIES:[\"Top result බලන්න\",\"Colombo delivery check කරන්න\",\"Categories බලන්න\"]-->",
+      "நல்லது, gift செய்ய நல்ல options சில கிடைத்தன. Birthday-க்கு chocolate cake safe pick. Flowers, chocolates, soft toy உடன் நல்லா match ஆகும். <!--QUICK_REPLIES:[\"Top result பார்க்க\",\"Colombo delivery check செய்ய\",\"Categories பார்க்க\"]-->"
+    ),
     toolResults: [{ name: "kapruka_search_products", result: { results: sampleProducts } }]
   };
+}
+
+function localizedMockText(language: ChatRequest["language"], english: string, sinhala: string, tamil: string) {
+  if (language === "si") return sinhala;
+  if (language === "ta") return tamil;
+  return english;
 }
 
 function isCheckoutIntent(message: string) {

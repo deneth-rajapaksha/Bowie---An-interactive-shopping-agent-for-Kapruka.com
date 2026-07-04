@@ -47,6 +47,36 @@ function createStarterMessages(language: LanguageCode): ChatMessage[] {
   return [{ ...starterMessagesByLanguage[language], id: safeId(`welcome-${language}`) }];
 }
 
+function getCheckoutIntentLabel(language: LanguageCode) {
+  if (language === "si") return "Checkout යන්න";
+  if (language === "ta") return "Checkout போக";
+  return "Proceed to checkout";
+}
+
+function getAddToCartReply(language: LanguageCode, productName?: string) {
+  if (!productName) {
+    if (language === "si") return "Add කරන්න product card එකක් තවම හමු වුණේ නැහැ. මුලින් product card එකක් තෝරන්න.";
+    if (language === "ta") return "Add செய்ய product card இன்னும் கிடைக்கவில்லை. முதலில் ஒரு product card தேர்ந்தெடுக்கவும்.";
+    return "I could not find a product card to add yet. Pick a product card first, then I can add it to your cart.";
+  }
+
+  if (language === "si") return `${productName} cart එකට add කළා. තව බලන්න පුළුවන්, නැත්නම් ලෑස්ති නම් checkout යන්න.`;
+  if (language === "ta") return `${productName} cart-க்கு add செய்துவிட்டேன். இன்னும் பார்க்கலாம், இல்லையெனில் தயாராக இருந்தால் checkout போகலாம்.`;
+  return `Added ${productName} to your cart. You can keep browsing or proceed to checkout when you are ready.`;
+}
+
+function getAddToCartQuickReplies(language: LanguageCode, hasProduct: boolean) {
+  if (!hasProduct) {
+    if (language === "si") return ["Categories බලන්න", "Cakes search කරන්න", "Top result බලන්න"];
+    if (language === "ta") return ["Categories பார்க்க", "Cakes search செய்ய", "Top result பார்க்க"];
+    return ["Browse categories", "Search cakes", "View top result"];
+  }
+
+  if (language === "si") return ["Checkout යන්න", "Similar බලන්න", "තව item එකක් add කරන්න"];
+  if (language === "ta") return ["Checkout போக", "Similar பார்க்க", "இன்னொரு item add செய்ய"];
+  return ["Proceed to checkout", "See similar", "Add another item"];
+}
+
 export function ChatPage() {
   const [selectedLanguage, setSelectedLanguage] = useState<LanguageCode | null>(null);
   const [chatLanguage, setChatLanguage] = useState<LanguageCode>("en");
@@ -141,10 +171,8 @@ export function ChatPage() {
         {
           id: safeId("assistant"),
           role: "assistant",
-          content: product
-            ? `Added ${product.name} to your cart. You can keep browsing or proceed to checkout when you are ready.`
-            : "I could not find a product card to add yet. Pick a product card first, then I can add it to your cart.",
-          quickReplies: product ? ["Proceed to checkout", "See similar", "Add another item"] : ["Browse categories", "Search cakes", "View top result"]
+          content: getAddToCartReply(chatLanguage, product?.name),
+          quickReplies: getAddToCartQuickReplies(chatLanguage, Boolean(product))
         }
       ]);
       setInput("");
@@ -332,6 +360,15 @@ export function ChatPage() {
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void sendMessage(input);
+  }
+
+  function sendQuickReply(chip: string) {
+    if (chip === getCheckoutIntentLabel(chatLanguage)) {
+      void sendMessage("Proceed to checkout", { displayMessage: chip });
+      return;
+    }
+
+    void sendMessage(chip);
   }
 
   function confirmLocalizedAddress(candidate: AddressCandidate) {
@@ -579,7 +616,7 @@ export function ChatPage() {
             </section>
 
             <footer className="input-panel">
-              <QuickReplyChips chips={latestQuickReplies} onSelect={sendMessage} disabled={isSending} />
+              <QuickReplyChips chips={latestQuickReplies} onSelect={sendQuickReply} disabled={isSending} />
               <form className="input-bar" onSubmit={handleSubmit}>
                 <button className="input-tool-button" type="button" aria-label="Add more context">
                   <CirclePlus size={22} strokeWidth={1.8} aria-hidden="true" />
@@ -607,7 +644,9 @@ export function ChatPage() {
               onUpdateQuantity={updateQuantity}
               onCheckout={() => {
                 setCartOpen(false);
-                void sendMessage("Proceed to checkout");
+                void sendMessage("Proceed to checkout", {
+                  displayMessage: getCheckoutIntentLabel(chatLanguage)
+                });
               }}
             />
           </div>

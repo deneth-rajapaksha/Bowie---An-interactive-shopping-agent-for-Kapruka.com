@@ -298,7 +298,8 @@ export async function POST(req: Request) {
           toolResults: finalToolResults,
           latestText,
           messages: trimmedMessages,
-          providerConfig
+          providerConfig,
+          language: body.language
         });
 
         trace.update({
@@ -523,6 +524,7 @@ type ToolBackedResponseInput = {
   latestText: string;
   messages: CoreMessage[];
   providerConfig: ReturnType<typeof getProviderConfig>;
+  language?: ChatRequest["language"];
 };
 
 type StructuredAssistantResponse = {
@@ -544,13 +546,15 @@ async function normalizeToolBackedAssistantResponse({
   toolResults,
   latestText,
   messages,
-  providerConfig
+  providerConfig,
+  language
 }: ToolBackedResponseInput) {
   const sanitized = sanitizeAssistantText(rawText);
   const renderableTools = toolResults.filter((toolResult) => RENDERABLE_TOOL_NAMES.has(toolResult.name));
   if (!renderableTools.length) return sanitized;
 
-  const fallback = fallbackStructuredToolText(renderableTools, latestText);
+  const visibleLanguage = getVisibleLanguage(latestText, language);
+  const fallback = fallbackStructuredToolText(renderableTools, visibleLanguage);
 
   try {
     const result = await generateText({
@@ -559,12 +563,16 @@ async function normalizeToolBackedAssistantResponse({
 
 Return only JSON:
 {
-  "text": "one short user-facing sentence in the user's language",
+  "text": "one short user-facing sentence in the required response language",
   "quickReplies": ["short chip 1", "short chip 2", "short chip 3"]
 }
 
 Rules:
-- Preserve the user's active language from their latest message.
+- Required response language: ${visibleLanguage}.
+- Use this required language even if the latest user text, quick reply, product
+  name, address, or checkout fragment is written in another language.
+- For sinhala, write Sinhala script. For tamil, write Tamil script. For english,
+  write English.
 - The frontend will render cards/panels from tool results separately.
 - Your JSON must not include product/card fields. Product data already lives in
   toolResults and must stay there: id/product_id, name, summary, description,
@@ -577,6 +585,7 @@ Rules:
 - No Markdown. No hidden comments. No extra keys.`,
       prompt: JSON.stringify({
         latestUserMessage: stripOperationalContext(latestText),
+        requiredResponseLanguage: visibleLanguage,
         rawAssistantText: sanitized,
         toolSummary: renderableTools.map((toolResult) => ({
           name: toolResult.name,
@@ -624,21 +633,28 @@ function withQuickReplies(text: string, quickReplies: string[]) {
   return `${clean} <!--QUICK_REPLIES:${JSON.stringify(quickReplies)}-->`;
 }
 
-function fallbackStructuredToolText(toolResults: ApiToolResult[], latestText: string) {
+function fallbackStructuredToolText(toolResults: ApiToolResult[], language: VisibleLanguage) {
   const primaryTool = toolResults[0]?.name;
-  const language = detectVisibleLanguage(latestText);
   const text = fallbackToolText(primaryTool, language);
   return withQuickReplies(text, fallbackQuickReplies(primaryTool, language));
 }
 
-function detectVisibleLanguage(text: string) {
+type VisibleLanguage = "english" | "sinhala" | "tamil";
+
+function getVisibleLanguage(text: string, language: ChatRequest["language"]): VisibleLanguage {
+  if (language === "si") return "sinhala";
+  if (language === "ta") return "tamil";
+  return detectVisibleLanguage(text);
+}
+
+function detectVisibleLanguage(text: string): VisibleLanguage {
   const sinhalaCount = Array.from(text.matchAll(/[\u0D80-\u0DFF]/g)).length;
   const tamilCount = Array.from(text.matchAll(/[\u0B80-\u0BFF]/g)).length;
   if (sinhalaCount || tamilCount) return sinhalaCount >= tamilCount ? "sinhala" : "tamil";
   return "english";
 }
 
-function fallbackToolText(toolName: string | undefined, language: "english" | "sinhala" | "tamil") {
+function fallbackToolText(toolName: string | undefined, language: VisibleLanguage) {
   const copy = {
     english: {
       products: "I found matching options. Pick a card to view details or add it to cart.",
@@ -687,7 +703,7 @@ function fallbackToolText(toolName: string | undefined, language: "english" | "s
   }
 }
 
-function fallbackQuickReplies(toolName: string | undefined, language: "english" | "sinhala" | "tamil") {
+function fallbackQuickReplies(toolName: string | undefined, language: VisibleLanguage) {
   const replies = {
     english: {
       products: ["View top result", "See similar", "Proceed to checkout"],
