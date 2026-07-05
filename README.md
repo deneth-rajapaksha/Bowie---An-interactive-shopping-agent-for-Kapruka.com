@@ -1,27 +1,161 @@
-# Project Bowie
+# Bowie: Kapruka Agentic Shopping Assistant
 
-Project Bowie is a conversational shopping assistant for Kapruka. It is built as two Next.js applications:
+Bowie is an interactive shopping agent for Kapruka.com. It is built for real Sri Lankan ecommerce workflows: product discovery, delivery checks, cart-aware checkout, multilingual conversations, order tracking, user feedback, observability, and cached tool execution.
 
-- `backend/`: the Bowie agent API, model router, Kapruka MCP tool bridge, Langfuse observability layer, Redis cache layer, and feedback/admin workflows.
-- `frontend/`: the full-screen chat interface, shopping cards, cart drawer, feedback controls, and proxy routes that connect the browser to the backend.
+This is not a normal chatbot that only answers from its prompt. Bowie is a tool-using shopping agent. It searches live Kapruka data through MCP tools, confirms checkout details, protects order creation from ambiguous localized text, records response quality through a feedback loop, and uses Redis caching so repeated product and delivery lookups stay fast.
 
-The name Bowie is inspired by the main branch of a tree. Kapruka means a wish-granting tree, so Bowie represents the branch that reaches toward the customer, understands the wish, and helps turn it into a real Kapruka order.
+The project is split into two Next.js apps:
 
-## What Bowie Does
+- `backend/`: agent API, model routing, Kapruka MCP tool execution, Google Places address lookup, Langfuse feedback/observability, Redis cache, security, and admin review workflows.
+- `frontend/`: full-screen chat UI, language selection, product cards, cart drawer, checkout flow, address confirmation cards, feedback controls, and local proxy routes.
 
-Bowie helps Kapruka customers shop conversationally instead of manually browsing many pages. The assistant can:
+## Why Bowie Is Different
 
-- Discover Kapruka products by category, search term, budget, stock, and currency.
-- Show product cards with real product IDs, names, prices, stock state, images, and Kapruka URLs.
-- Fetch product detail before answering detailed questions about a specific item.
-- Check delivery availability for Sri Lankan cities and dates.
-- Build a guest checkout order and return a payment link.
-- Track existing Kapruka orders.
-- Keep the cart context synchronized between the frontend and backend.
-- Ask for feedback on assistant responses.
-- Store traces and feedback in Langfuse.
-- Send admin alerts when a user dislikes an answer and explains why.
-- Cache Kapruka tool results with Upstash Redis when configured, or in memory during local development.
+Generic chatbots usually answer from conversation context. Generic AI agents can use tools, but they often lack domain guardrails for a real checkout flow. Bowie is narrower and more practical: it is grounded in Kapruka MCP tools, guarded by schema validation, strengthened with Google Places address confirmation, measured through feedback traces, and accelerated with Redis.
+
+### 1. Agent-first shopping, not prompt-only chat
+
+Most shopping chatbots produce recommendations from text alone. Bowie grounds answers in Kapruka tools:
+
+- `kapruka_search_products` for real products, prices, images, stock, and URLs.
+- `kapruka_get_product` before answering item-specific questions.
+- `kapruka_check_delivery` before promising delivery availability.
+- `kapruka_create_order` only after required checkout fields are confirmed.
+- `kapruka_track_order` for order status.
+
+The backend validates tool arguments with Zod, compacts large tool results before showing them to the model, and blocks checkout creation if Sinhala or Tamil script leaks into fields that Kapruka expects in English or romanized form.
+
+### 2. Multilingual Sri Lankan checkout with Google Maps address confirmation
+
+Bowie supports English, Sinhala, Tamil, Singlish, Tanglish, and mixed-language chat. The hard part is checkout: translating Unicode addresses directly can reduce address accuracy because road names, localities, landmarks, and house details may be altered by translation.
+
+To avoid that, Bowie uses a dedicated localized address workflow:
+
+1. The frontend detects Sinhala or Tamil script while checkout is waiting for a delivery address.
+2. The backend parses the message into a Google Places search query.
+3. Google Places Autocomplete and Place Details return accurate Sri Lankan address candidates.
+4. The user confirms the correct address in an address confirmation card with a Google Maps preview.
+5. Bowie sends only the clean English or romanized `delivery.address` and `delivery.city` to Kapruka MCP.
+
+This keeps the conversation natural for Sinhala and Tamil users while protecting checkout accuracy.
+
+Required backend env:
+
+```env
+GOOGLE_PLACES_API_KEY=
+# or
+GOOGLE_MAPS_API_KEY=
+```
+
+### 3. LangChain-style feedback loop for quality control
+
+Bowie includes a human feedback workflow inspired by LangChain/LangSmith-style AI review loops and implemented with Langfuse in this codebase.
+
+Each traced assistant response can be rated from the frontend:
+
+- Like writes a positive `user_feedback` score.
+- Dislike writes a negative score.
+- If the user dislikes without a reason, the frontend asks what went wrong.
+- A disliked response with a reason stores conversation context for review.
+- Optional Slack or Discord webhooks notify admins about unsatisfactory answers.
+- Normal traces are eligible for cleanup after 14 days, while negative-feedback traces are retained for manual review.
+
+This makes Bowie measurable. The team can see which responses failed, why they failed, and which trace should be inspected instead of guessing from logs.
+
+Required backend env:
+
+```env
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_ENVIRONMENT=development
+```
+
+Optional admin alert env:
+
+```env
+ADMIN_ALERT_WEBHOOK_URL=
+ADMIN_ALERT_WEBHOOK_TYPE=slack
+# or discord
+```
+
+### 4. Redis-backed tool caching
+
+Kapruka product and delivery tools are network-bound. Bowie wraps safe tool calls with a cache layer that uses Upstash Redis in deployed environments and an in-memory fallback during local development.
+
+Redis helps Bowie by:
+
+- Reducing repeated calls to the Kapruka MCP server.
+- Making popular searches feel faster.
+- Sharing cache state across serverless instances.
+- Keeping volatile data fresh with short TTLs.
+- Never caching checkout creation.
+
+Product search also has a hot-cache promotion layer. If the same normalized search is requested often enough inside a time window, Bowie promotes it to a longer-lived hot cache entry.
+
+Required backend env:
+
+```env
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+```
+
+Optional hot-search tuning:
+
+```env
+SEARCH_HOT_CACHE_MIN_HITS=3
+SEARCH_HOT_CACHE_WINDOW_SECONDS=3600
+SEARCH_HOT_CACHE_TTL_SECONDS=21600
+```
+
+## Core Features
+
+- Conversational product discovery for Kapruka categories, budgets, stock, and currencies.
+- Real product cards with product IDs, names, prices, stock state, images, and Kapruka URLs.
+- Cart state synchronized between frontend and backend.
+- Guest checkout flow that collects recipient, phone, delivery address, city, delivery date, address type, sender, and gift message.
+- Sinhala and Tamil address confirmation through Google Places before checkout.
+- Order tracking through Kapruka MCP.
+- Model routing across OpenAI, Anthropic, Gemini, Modal vLLM, and OpenRouter.
+- Langfuse traces, feedback scores, retention cleanup, and admin review.
+- Upstash Redis cache with local memory fallback.
+- Frontend mock responses when no backend URL is configured, useful for UI-only development.
+
+## Architecture
+
+```text
+Customer browser
+  |
+  | /api/chat, /api/address, /api/feedback
+  v
+Frontend Next.js app
+  |
+  | proxy with optional BOWIE_API_SECRET
+  v
+Backend Next.js API
+  |
+  | model routing + prompt + validation + tracing
+  v
+AI provider
+  |
+  | tool calls
+  v
+Kapruka MCP server
+  |
+  | product, delivery, checkout, tracking data
+  v
+Backend response
+  |
+  | assistant text + tool results + trace id
+  v
+Frontend renderer
+  |
+  | cards, checkout panels, address confirmation, feedback
+  v
+Customer
+```
+
+The frontend never talks to Kapruka MCP directly. It calls local frontend API routes, and those routes forward to the backend when `BOWIE_BACKEND_URL` is configured. The backend remains the source of truth for tools, cache, observability, feedback, and order behavior.
 
 ## Repository Layout
 
@@ -29,6 +163,7 @@ Bowie helps Kapruka customers shop conversationally instead of manually browsing
 kapruka/
   backend/
     app/api/
+      address/route.ts
       admin/langfuse-retention/route.ts
       chat/route.ts
       feedback/route.ts
@@ -41,11 +176,13 @@ kapruka/
       mcp/
       notifications/
       observability/
+      security.ts
     modal/
     package.json
     Tooldetails.md
   frontend/
     app/
+      api/address/route.ts
       api/chat/route.ts
       api/feedback/route.ts
       layout.tsx
@@ -58,98 +195,63 @@ kapruka/
     package.json
 ```
 
-## Architecture
+## Backend
 
-The application is intentionally split into a backend agent service and a frontend user experience.
+The backend is a Next.js API app named `bowie-agent`.
 
-```text
-Customer browser
-  |
-  | POST /api/chat
-  v
-Frontend Next.js route
-  |
-  | forwards messages, cart, conversationId
-  v
-Backend /api/chat
-  |
-  | builds prompt, chooses model, exposes Kapruka tools
-  v
-AI SDK provider
-  |
-  | optional tool calls
-  v
-Kapruka MCP server
-  |
-  | product, delivery, checkout, tracking data
-  v
-Backend response
-  |
-  | text + toolResults + conversationId + traceId
-  v
-Frontend renderer
-  |
-  | cards, delivery panels, order summaries, quick replies
-  v
-Customer
-```
+Main responsibilities:
 
-The frontend never calls the Kapruka MCP server directly. It talks to its own local Next.js API routes, and those routes either forward to the backend or return mock data when `BOWIE_BACKEND_URL` is not configured. The backend is the source of truth for model selection, tool execution, caching, trace creation, feedback scoring, and order-related behavior.
+- Build the Bowie system prompt and pass current Asia/Colombo context.
+- Select fast or smart models based on conversation complexity.
+- Expose Kapruka MCP tools to the AI SDK.
+- Validate and normalize MCP tool arguments.
+- Execute and cache eligible MCP tools.
+- Parse localized checkout addresses and resolve them through Google Places.
+- Create Langfuse traces and score user feedback.
+- Retain negative-feedback traces for admin review.
+- Protect backend routes with optional `BOWIE_API_SECRET`.
 
-## Backend Specification
+Backend tech stack:
 
-The backend is a Next.js 14 API application named `bowie-agent`. It runs on Node.js for the chat, feedback, observability, and admin routes, with Edge runtime used for lightweight schema/product routes.
+- Next.js `15.5.18`
+- React `18.3.1`
+- TypeScript `5.8.3`
+- Vercel AI SDK
+- `@modelcontextprotocol/sdk`
+- `zod`
+- `@langfuse/client`
+- `@upstash/redis`
+- OpenAI, Anthropic, Google Gemini, Modal-compatible OpenAI API, and OpenRouter providers
 
-### Backend Responsibilities
+## Frontend
 
-The backend owns:
+The frontend is a Next.js app named `kapruka-bowie-frontend`. It runs on port `3001` by default.
 
-- AI provider configuration and model selection.
-- System prompt construction for Bowie.
-- Conversation history trimming.
-- Tool schema exposure to the AI SDK.
-- MCP client connection to Kapruka.
-- Tool argument validation with Zod.
-- Tool response compaction before sending data to the model and frontend.
-- Redis-backed caching for Kapruka tool results.
-- Langfuse trace creation and feedback scoring.
-- Trace retention cleanup.
-- Admin email alerts for unsatisfactory conversations.
-- Backend health and observability metadata.
+Main responsibilities:
 
-### Backend Tech Stack
+- Language-first chat entry for English, Sinhala, and Tamil.
+- Chat timeline with assistant messages and quick replies.
+- Product, delivery, checkout, order, tracking, and category cards.
+- Cart drawer and cart-aware chat requests.
+- Google Maps address confirmation card for localized checkout addresses.
+- Like/dislike feedback controls and dislike-reason collection.
+- Proxy routes to backend chat, address, and feedback endpoints.
+- Mock local data when `BOWIE_BACKEND_URL` is not set.
+
+Frontend tech stack:
 
 - Next.js `14.2.30`
 - React `18.3.1`
 - TypeScript `5.8.3`
-- Vercel AI SDK `ai`
-- AI providers:
-  - `@ai-sdk/openai`
-  - `@ai-sdk/anthropic`
-  - `@ai-sdk/google`
-  - OpenAI-compatible Modal vLLM
-  - OpenRouter through an OpenAI-compatible client
-- MCP client:
-  - `@modelcontextprotocol/sdk`
-- Validation:
-  - `zod`
-- Observability:
-  - `@langfuse/client`
-  - `@langfuse/otel`
-  - `@langfuse/tracing`
-  - `@opentelemetry/sdk-node`
-- Cache:
-  - `@upstash/redis`
-- Email alerts:
-  - `nodemailer`
+- `lucide-react`
 
-### Backend API Routes
+## API Routes
 
-#### `POST /api/chat`
+### Backend `POST /api/chat`
 
-Main agent endpoint.
+Main agent endpoint. It receives model messages, cart context, language, conversation ID, and user ID. It returns assistant text, structured tool results, a conversation ID, and a Langfuse trace ID when tracing is enabled.
 
-Request body:
+Example request:
 
 ```json
 {
@@ -159,25 +261,16 @@ Request body:
   "responseFormat": "json",
   "conversationId": "conversation_abc123",
   "userId": "optional-user-id",
-  "cart": [
-    {
-      "product_id": "cake00ka002034",
-      "name": "Chocolate Cake",
-      "price": 5500,
-      "currency": "LKR",
-      "image_url": "https://example.com/image.jpg",
-      "quantity": 1,
-      "icing_text": "Happy Birthday"
-    }
-  ]
+  "language": "en",
+  "cart": []
 }
 ```
 
-Response body:
+Example response:
 
 ```json
 {
-  "text": "I found these birthday cake options on Kapruka...",
+  "text": "I found a few birthday cake options on Kapruka...",
   "toolResults": [
     {
       "name": "kapruka_search_products",
@@ -194,27 +287,48 @@ Response body:
 }
 ```
 
-Important behavior:
+### Backend `POST /api/address`
 
-- Defaults to JSON responses but can stream when `responseFormat` is `stream`.
-- Appends cart context into the latest user message when the frontend sends cart items.
-- Chooses a fast or smart model using `lib/ai/router.ts`.
-- Uses high-intent routing for checkout, order, payment, tracking, delivery, comparison, and gift-message requests.
-- Trims history more aggressively for Modal than for cloud providers.
-- Enables AI SDK tool calling with Kapruka MCP tools.
-- Creates Langfuse traces when Langfuse credentials are present.
-- Returns trace and conversation headers:
-  - `x-bowie-conversation-id`
-  - `x-bowie-feedback-endpoint`
-  - `x-langfuse-trace-id` when tracing is enabled.
-- Sanitizes leaked hidden context, leaked tool-call blocks, and dangling tool JSON before responding.
-- Runs a grounded product-search fallback when the assistant appears to need real product cards but no useful search result was returned.
+Localized checkout address endpoint. It accepts Sinhala or Tamil address text, builds an English Google Places query, fetches candidates, merges user-provided specifics with Google-formatted address data, and returns confirmation options.
 
-#### `POST /api/feedback`
+Example request:
 
-Stores user feedback for a specific assistant response.
+```json
+{
+  "text": "localized delivery address message",
+  "language": "sinhala"
+}
+```
 
-Request body:
+Example response:
+
+```json
+{
+  "inputLanguage": "sinhala",
+  "parsed": {
+    "searchQuery": "English Google Places query, Sri Lanka",
+    "city": "Colombo"
+  },
+  "candidates": [
+    {
+      "placeId": "google-place-id",
+      "formattedAddress": "Google formatted address",
+      "city": "Colombo",
+      "mcpAddress": "Clean English address for Kapruka",
+      "location": {
+        "lat": 6.9271,
+        "lng": 79.8612
+      }
+    }
+  ]
+}
+```
+
+### Backend `POST /api/feedback`
+
+Stores response feedback against a Langfuse trace.
+
+Example request:
 
 ```json
 {
@@ -231,152 +345,40 @@ Request body:
 
 Behavior:
 
-- Validates the payload with Zod.
-- Scores feedback in Langfuse as:
-  - `1` for `like`
-  - `-1` for `dislike`
-- If the user dislikes without a reason, the route returns `202` and asks the frontend to collect one.
-- If a dislike includes a reason, the backend can send an admin email alert through Gmail SMTP.
-- Disliked conversations include metadata for admin review and are excluded from automatic trace deletion.
+- `like` creates score `1`.
+- `dislike` creates score `-1`.
+- Dislike without `reason` returns `requiresReason: true`.
+- Dislike with `reason` can trigger an admin webhook.
 
-#### `GET /api/observability/health`
+### Backend `GET /api/observability/health`
 
-Returns observability configuration status.
+Returns Langfuse configuration status.
 
-Example response:
+### Backend `GET or POST /api/admin/langfuse-retention`
 
-```json
-{
-  "langfuseEnabled": true,
-  "publicKeyPresent": true,
-  "secretKeyPresent": true,
-  "baseUrl": "https://cloud.langfuse.com",
-  "environment": "development",
-  "exportMode": "immediate"
-}
-```
+Deletes old normal traces while preserving traces with negative feedback. Protect this route with `BOWIE_RETENTION_CRON_SECRET` or `CRON_SECRET`.
 
-#### `GET or POST /api/admin/langfuse-retention`
+### Backend `GET /api/mcp-schema`
 
-Deletes old normal Langfuse traces after the retention window.
+Returns available Kapruka MCP tool definitions, using the live MCP schema when available and local definitions as fallback.
 
-Behavior:
+### Backend `GET /api/product/[id]`
 
-- Uses `BOWIE_RETENTION_CRON_SECRET` or `CRON_SECRET` when configured.
-- Finds traces tagged `bowie-normal` older than 14 days.
-- Deletes traces without negative feedback.
-- Retains traces with unsatisfied feedback for admin review.
+Fetches one product through `kapruka_get_product`.
 
-#### `GET /api/mcp-schema`
+## Kapruka MCP Tools
 
-Returns available MCP tools. It first tries to fetch the live MCP schema from the Kapruka MCP server. If that fails, it returns the local tool definitions as a fallback.
+| Tool | Purpose | Cached |
+| --- | --- | --- |
+| `kapruka_list_categories` | List Kapruka categories and children. | Yes |
+| `kapruka_search_products` | Search products by query, category, price, stock, currency, and cursor. | Yes |
+| `kapruka_get_product` | Fetch product details by product ID. | Yes |
+| `kapruka_list_delivery_cities` | List or search supported delivery cities. | Yes |
+| `kapruka_check_delivery` | Check city/date delivery availability. | Yes |
+| `kapruka_create_order` | Create a guest checkout order and payment link. | No |
+| `kapruka_track_order` | Track a Kapruka order. | Yes |
 
-#### `GET /api/product/[id]`
-
-Fetches one Kapruka product through `kapruka_get_product` and returns it with cache headers.
-
-## Langfuse Specification
-
-Langfuse is used for observability, feedback, retention, and admin review.
-
-### When Langfuse Is Enabled
-
-Langfuse is enabled only when both of these environment variables exist:
-
-```env
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-```
-
-Optional Langfuse variables:
-
-```env
-LANGFUSE_BASE_URL=https://cloud.langfuse.com
-LANGFUSE_ENVIRONMENT=development
-LANGFUSE_EXPORT_MODE=immediate
-```
-
-### Trace Creation
-
-Every traced chat turn creates or upserts a Langfuse trace with:
-
-- Trace ID generated by the backend.
-- Name: `bowie-chat-turn`.
-- Session ID: Bowie `conversationId`.
-- Optional user ID.
-- Tag: `bowie-normal`.
-- Input:
-  - Latest user text.
-  - Trimmed model messages.
-- Output:
-  - Assistant text.
-  - Tool results.
-- Metadata:
-  - AI provider.
-  - Fast model.
-  - Smart model.
-  - Token usage when available.
-  - Response format.
-  - Retention policy.
-  - Retention expiry timestamp.
-
-### Feedback Scores
-
-The feedback route writes a Langfuse score named `user_feedback`.
-
-Likes:
-
-- Score value: `1`
-- Retention policy: `auto_delete_after_14_days`
-
-Dislikes:
-
-- Score value: `-1`
-- Retention policy: `manual_admin_delete_only`
-- Metadata can include the reason, conversation snapshot, assistant message, message ID, user ID, and conversation ID.
-
-### Retention Policy
-
-Normal traces are designed to be automatically deleted after 14 days. The backend calculates a `retentionExpiresAt` value and stores it in trace metadata.
-
-The retention cleanup route deletes old normal traces unless they have negative feedback. Negative-feedback traces are retained because they need human review.
-
-## Redis Specification
-
-Redis is used through Upstash Redis. It is optional in local development but recommended for deployed environments.
-
-### When Redis Is Enabled
-
-Redis is enabled when both variables are present:
-
-```env
-UPSTASH_REDIS_REST_URL=
-UPSTASH_REDIS_REST_TOKEN=
-```
-
-If those variables are missing, the backend uses an in-memory `Map` cache. This is useful for local development but is not shared across server instances and resets whenever the process restarts.
-
-### Cache API
-
-The backend cache wrapper exposes:
-
-- `getCached(key)`
-- `setCached(key, value, ttlSeconds)`
-- `incrementCachedCounter(key, ttlSeconds)`
-
-When Redis is configured:
-
-- `getCached` reads from Upstash.
-- `setCached` writes to Upstash with an expiry.
-- `incrementCachedCounter` increments a Redis counter and applies an expiry.
-
-When Redis is not configured:
-
-- The same functions operate against an in-memory cache record with `expiresAt`.
-
-### Tool Cache TTLs
-
-The backend caches only safe tool calls. Checkout creation is never cached.
+Tool cache TTLs:
 
 | Tool | TTL |
 | --- | ---: |
@@ -388,286 +390,11 @@ The backend caches only safe tool calls. Checkout creation is never cached.
 | `kapruka_track_order` | 30 seconds |
 | `kapruka_create_order` | Not cached |
 
-### Hot Search Cache
-
-Product search has a second hot-cache layer.
-
-Environment variables:
-
-```env
-SEARCH_HOT_CACHE_MIN_HITS=3
-SEARCH_HOT_CACHE_WINDOW_SECONDS=3600
-SEARCH_HOT_CACHE_TTL_SECONDS=21600
-```
-
-Flow:
-
-1. Bowie builds a stable SHA-256 cache key from the tool name and normalized arguments.
-2. For `kapruka_search_products`, it first checks the hot cache.
-3. If the normal cache has a value, it returns that value and increments a hit counter.
-4. Once the hit counter reaches the configured threshold, the result is promoted to hot cache.
-5. Hot cached searches remain available for the configured hot TTL.
-
-This keeps repeated popular searches fast while still allowing normal search results to refresh frequently.
-
-## MCP Tool Specification
-
-Bowie uses a Kapruka MCP server through `@modelcontextprotocol/sdk`.
-
-Default MCP server:
-
-```env
-MCP_SERVER_URL=https://mcp.kapruka.com/mcp
-```
-
-The backend validates tool arguments locally before sending them to MCP. The available tools are:
-
-| Tool | Purpose | Cached |
-| --- | --- | --- |
-| `kapruka_list_categories` | List top-level Kapruka categories and optional children. | Yes |
-| `kapruka_search_products` | Search products by query, category, stock, price, currency, and cursor. | Yes |
-| `kapruka_get_product` | Fetch one product by product ID. | Yes |
-| `kapruka_list_delivery_cities` | List or search supported Sri Lankan delivery cities. | Yes |
-| `kapruka_check_delivery` | Check delivery availability and rate for a city/date. | Yes |
-| `kapruka_create_order` | Create a guest checkout order and payment link. | No |
-| `kapruka_track_order` | Track an existing Kapruka order. | Yes |
-
-The backend compacts large tool responses before giving them back to the model or frontend. For example:
-
-- Product searches are limited to the first 4 products.
-- Product descriptions are truncated.
-- Product images and variants are capped.
-- Category lists are capped to keep payloads small.
-
-## AI Provider Specification
-
-The backend supports multiple providers through a single routing layer.
-
-Provider selection:
-
-```env
-BOWIE_AI_PROVIDER=openai
-```
-
-Fallback variable:
-
-```env
-AI_PROVIDER=openai
-```
-
-Supported values:
-
-- `openai`
-- `anthropic`
-- `gemini`
-- `modal`
-- `openrouter`
-
-Default models:
-
-| Provider | Fast model | Smart model |
-| --- | --- | --- |
-| `openai` | `gpt-4.1-mini` | `gpt-4.1` |
-| `anthropic` | `claude-haiku-4-5` | `claude-sonnet-4-6` |
-| `gemini` | `gemini-3.5-flash` | `gemini-3.5-flash` |
-| `modal` | `bowie-modal` | `bowie-modal` |
-| `openrouter` | `openai/gpt-oss-120b:free` | `openai/gpt-oss-120b:free` |
-
-Model override variables:
-
-```env
-BOWIE_FAST_MODEL=
-BOWIE_SMART_MODEL=
-OPENAI_FAST_MODEL=
-OPENAI_SMART_MODEL=
-ANTHROPIC_FAST_MODEL=
-ANTHROPIC_SMART_MODEL=
-GEMINI_FAST_MODEL=
-GEMINI_SMART_MODEL=
-MODAL_FAST_MODEL=
-MODAL_SMART_MODEL=
-OPENROUTER_FAST_MODEL=
-OPENROUTER_SMART_MODEL=
-```
-
-The router chooses the smart model when:
-
-- The conversation has more than 14 messages.
-- The latest user text mentions checkout, order, payment, tracking, delivery, comparison, or gift messages.
-
-Otherwise it uses the fast model.
-
-## Modal vLLM Backend Option
-
-The backend can use an OpenAI-compatible Modal vLLM server.
-
-Set:
-
-```env
-BOWIE_AI_PROVIDER=modal
-MODAL_OPENAI_BASE_URL=https://<workspace>--bowie-vllm-serve.modal.run/v1
-MODAL_API_KEY=modal-local-dev
-MODAL_FAST_MODEL=bowie-modal
-MODAL_SMART_MODEL=bowie-modal
-```
-
-See `backend/modal/README.md` for Modal deployment commands and notes.
-
-## Backend Request Flow
-
-The backend chat route works like this:
-
-1. Parse the request body.
-2. Read `messages`, `cart`, `conversationId`, `userId`, and `responseFormat`.
-3. Extract the latest user text.
-4. Append hidden cart context to the latest user message when cart items are present.
-5. Read the provider configuration.
-6. Trim history based on the provider.
-7. Select the active model.
-8. Build the Bowie system prompt with the current Asia/Colombo date.
-9. Attach the Kapruka MCP tool set to the AI SDK call.
-10. Create a Langfuse trace wrapper when Langfuse is configured.
-11. Run `generateText` for JSON responses or `streamText` for streaming responses.
-12. Execute MCP tools when the model calls them.
-13. Cache eligible tool results through Redis or memory cache.
-14. Compact tool results.
-15. Optionally run a grounded product-search fallback.
-16. Sanitize the assistant text.
-17. Update and flush the Langfuse trace.
-18. Return text, tool results, conversation ID, trace ID, and feedback instructions.
-
-## Frontend Specification
-
-The frontend is a Next.js 14 application named `kapruka-bowie-frontend`. It runs the user-facing chat interface on port `3001` by default.
-
-### Frontend Responsibilities
-
-The frontend owns:
-
-- The Bowie chat shell.
-- The side rail and cart summary.
-- The message timeline.
-- User input and quick replies.
-- Product cards and product detail panels.
-- Delivery result cards.
-- Checkout summary cards.
-- Order tracking cards.
-- Category grids.
-- Cart drawer state.
-- Feedback buttons and dislike reason collection.
-- Local proxy routes to the backend.
-- Mock fallback behavior when no backend URL is configured.
-
-### Frontend Tech Stack
-
-- Next.js `14.2.30`
-- React `18.3.1`
-- TypeScript `5.8.3`
-- `lucide-react` for icons
-
-### Frontend Chat Flow
-
-1. The page loads `ChatPage`.
-2. Bowie starts with a welcome assistant message and starter quick replies.
-3. The user sends a message.
-4. The frontend appends the user message locally.
-5. The frontend sends `messages`, `conversationId`, and `cart` to `/api/chat`.
-6. The frontend route forwards the request to the backend when `BOWIE_BACKEND_URL` is configured.
-7. If no backend URL exists, the route returns mock Kapruka-like data for local UI development.
-8. The frontend receives assistant text, tool results, quick replies, conversation ID, and trace ID.
-9. Hidden quick-reply comments are extracted from assistant text.
-10. Tool results are converted into renderable blocks.
-11. The message timeline renders the assistant bubble plus any product, delivery, order, tracking, or category UI.
-12. Product cards can be added to the cart.
-13. The cart is sent back to the backend on future messages so checkout can continue without asking the user to reselect items.
-
-### Frontend Proxy Routes
-
-#### `POST /api/chat`
-
-If `BOWIE_BACKEND_URL` exists, the frontend forwards chat traffic to the backend. `BOWIE_BACKEND_URL` can point either to the backend root or directly to `/api/chat`.
-
-If `BOWIE_BACKEND_URL` is missing, the frontend returns mock data from `frontend/lib/mock-data.ts`. This keeps UI development possible without a live model or MCP server.
-
-#### `POST /api/feedback`
-
-If `BOWIE_BACKEND_URL` exists, feedback is forwarded to the backend feedback endpoint.
-
-If `BOWIE_BACKEND_URL` is missing, the route returns a local success payload and asks for a reason when the user dislikes without one.
-
-### Frontend Rendering
-
-The frontend receives backend `toolResults` and converts them in `frontend/lib/message-renderer.ts`.
-
-Tool result to UI mapping:
-
-| Tool | Frontend block |
-| --- | --- |
-| `kapruka_search_products` | `product_list` |
-| `kapruka_get_product` | `product_detail` |
-| `kapruka_check_delivery` | `delivery_check` |
-| `kapruka_create_order` | `order_summary` |
-| `kapruka_track_order` | `order_tracker` |
-| `kapruka_list_categories` | `category_grid` |
-
-The renderer also strips hidden operational comments and leaked tool-call artifacts from visible assistant text.
-
-### Cart Behavior
-
-The cart is held in React state inside `ChatPage`.
-
-Each item includes:
-
-```ts
-{
-  product_id: string;
-  name: string;
-  price: number;
-  currency: string;
-  image_url: string | null;
-  quantity: number;
-  icing_text?: string;
-}
-```
-
-When a product card is added:
-
-- Existing items increment quantity.
-- New products are appended to the cart.
-- The cart drawer opens.
-
-When the user clicks checkout:
-
-- The drawer closes.
-- The frontend sends `Proceed to checkout`.
-- The current cart is included in the chat request.
-- The backend uses hidden cart context to continue checkout collection.
-
-### Feedback Behavior
-
-Assistant messages can carry `traceId` and `conversationId`. When a user clicks:
-
-- Like: frontend sends a positive feedback payload.
-- Dislike: frontend sends a negative feedback payload.
-- Dislike without reason: backend asks for a reason, and the next user message is treated as the reason.
-
-When the reason is submitted, the frontend sends:
-
-- Rating.
-- Trace ID.
-- Conversation ID.
-- Message ID.
-- Reason.
-- Assistant message snapshot.
-- Conversation snapshot.
-
-The backend stores this in Langfuse and optionally emails an admin.
-
 ## Environment Variables
 
 ### Backend `.env`
 
-Minimum model setup for OpenAI:
+Minimum OpenAI setup:
 
 ```env
 BOWIE_AI_PROVIDER=openai
@@ -678,6 +405,14 @@ Kapruka MCP:
 
 ```env
 MCP_SERVER_URL=https://mcp.kapruka.com/mcp
+```
+
+Google address lookup:
+
+```env
+GOOGLE_PLACES_API_KEY=
+# or
+GOOGLE_MAPS_API_KEY=
 ```
 
 Langfuse:
@@ -700,20 +435,24 @@ SEARCH_HOT_CACHE_WINDOW_SECONDS=3600
 SEARCH_HOT_CACHE_TTL_SECONDS=21600
 ```
 
-Admin retention:
+Route security:
+
+```env
+BOWIE_API_SECRET=
+```
+
+Retention cleanup:
 
 ```env
 BOWIE_RETENTION_CRON_SECRET=
 CRON_SECRET=
 ```
 
-Admin email alerts:
+Admin alerts:
 
 ```env
-GMAIL_SMTP_USER=
-GMAIL_SMTP_APP_PASSWORD=
-GMAIL_SMTP_FROM=
-ADMIN_ALERT_EMAIL=
+ADMIN_ALERT_WEBHOOK_URL=
+ADMIN_ALERT_WEBHOOK_TYPE=slack
 ```
 
 OpenRouter:
@@ -736,44 +475,54 @@ MODAL_FAST_MODEL=bowie-modal
 MODAL_SMART_MODEL=bowie-modal
 ```
 
+Model overrides:
+
+```env
+BOWIE_FAST_MODEL=
+BOWIE_SMART_MODEL=
+OPENAI_FAST_MODEL=
+OPENAI_SMART_MODEL=
+ANTHROPIC_FAST_MODEL=
+ANTHROPIC_SMART_MODEL=
+GEMINI_FAST_MODEL=
+GEMINI_SMART_MODEL=
+MODAL_FAST_MODEL=
+MODAL_SMART_MODEL=
+OPENROUTER_FAST_MODEL=
+OPENROUTER_SMART_MODEL=
+```
+
 ### Frontend `.env`
 
 ```env
 BOWIE_BACKEND_URL=http://localhost:3000
+BOWIE_API_SECRET=
 ```
 
-`BOWIE_BACKEND_URL` can be:
+`BOWIE_BACKEND_URL` can point to either the backend root or the chat endpoint:
 
-- Backend root: `http://localhost:3000`
-- Chat endpoint: `http://localhost:3000/api/chat`
+```env
+BOWIE_BACKEND_URL=http://localhost:3000
+BOWIE_BACKEND_URL=http://localhost:3000/api/chat
+```
 
-The frontend automatically derives the feedback endpoint from the backend URL.
+The frontend derives backend `/api/chat`, `/api/address`, and `/api/feedback` URLs automatically.
 
 ## Local Development
 
-Install backend dependencies:
+Install and run the backend:
 
 ```powershell
 cd backend
 npm install
-```
-
-Run backend:
-
-```powershell
 npm run dev
 ```
 
-Install frontend dependencies:
+Install and run the frontend:
 
 ```powershell
 cd frontend
 npm install
-```
-
-Run frontend:
-
-```powershell
 npm run dev
 ```
 
@@ -782,9 +531,7 @@ Default local URLs:
 - Backend: `http://localhost:3000`
 - Frontend: `http://localhost:3001`
 
-## Useful Scripts
-
-Backend:
+Useful scripts:
 
 ```powershell
 npm run dev
@@ -794,57 +541,25 @@ npm run typecheck
 npm run lint
 ```
 
-Frontend:
+Run scripts inside either `backend/` or `frontend/`.
 
-```powershell
-npm run dev
-npm run build
-npm run start
-npm run typecheck
-npm run lint
-```
-
-## Testing and Verification Checklist
-
-After changes, verify:
+## Verification Checklist
 
 - Backend typecheck passes.
 - Frontend typecheck passes.
-- Frontend can send a message with no backend URL and receive mock cards.
-- Frontend can send a message with `BOWIE_BACKEND_URL` set and receive backend data.
-- Backend `/api/observability/health` returns the expected Langfuse status.
-- Product search returns real `kapruka_search_products` cards.
-- Product detail renders from `kapruka_get_product`.
-- Delivery check renders from `kapruka_check_delivery`.
+- Frontend can show mock product cards when `BOWIE_BACKEND_URL` is not set.
+- Frontend can reach backend chat when `BOWIE_BACKEND_URL` is set.
+- Product search returns real Kapruka product cards.
+- Product details render from `kapruka_get_product`.
+- Delivery checks render from `kapruka_check_delivery`.
 - Cart items are included in later chat requests.
-- Checkout does not happen until all required recipient, delivery, sender, and cart details exist.
+- Checkout is blocked until all required recipient, delivery, sender, and cart details exist.
+- Sinhala or Tamil checkout address input opens the Google address confirmation flow.
+- Confirmed address is sent to MCP as English or romanized text.
 - Like feedback creates a positive Langfuse score.
 - Dislike feedback asks for a reason.
-- Dislike feedback with a reason creates a negative score and sends an admin alert when SMTP is configured.
-- Retention cleanup deletes old normal traces and preserves disliked traces.
-
-## Deployment Notes
-
-Backend deployment should include:
-
-- AI provider credentials.
-- MCP server URL.
-- Langfuse credentials.
-- Upstash Redis credentials.
-- Optional SMTP credentials.
-- Retention cron secret if the cleanup route is called by a scheduler.
-
-Frontend deployment should include:
-
-- `BOWIE_BACKEND_URL` pointing to the deployed backend.
-
-Because the frontend can mock responses when no backend is configured, confirm production has `BOWIE_BACKEND_URL` set before launch.
-
-## Privacy and Retention
-
-Bowie stores operational traces only when Langfuse is configured. Normal traces are tagged for automatic deletion after 14 days. Conversations with negative feedback are retained for manual admin review because they represent quality and safety issues that need investigation.
-
-Sensitive checkout details should be handled carefully. The backend should only collect the fields needed to create a Kapruka checkout link, and the frontend should avoid displaying hidden cart or product context comments to the user.
+- Dislike with a reason creates a negative Langfuse score and triggers an admin alert when configured.
+- Retention cleanup deletes old normal traces and preserves negative-feedback traces.
 
 ## Troubleshooting
 
@@ -858,9 +573,25 @@ BOWIE_BACKEND_URL=http://localhost:3000
 
 Restart the frontend server.
 
-### Backend says Langfuse is disabled
+### Address lookup fails
 
-Check:
+Check backend env:
+
+```env
+GOOGLE_PLACES_API_KEY=
+```
+
+or:
+
+```env
+GOOGLE_MAPS_API_KEY=
+```
+
+Also confirm the frontend has `BOWIE_BACKEND_URL` pointing to the backend.
+
+### Langfuse is disabled
+
+Check backend env:
 
 ```env
 LANGFUSE_PUBLIC_KEY=
@@ -875,7 +606,7 @@ GET /api/observability/health
 
 ### Redis is not being used
 
-Check:
+Check backend env:
 
 ```env
 UPSTASH_REDIS_REST_URL=
@@ -884,17 +615,9 @@ UPSTASH_REDIS_REST_TOKEN=
 
 Without both values, Bowie uses local memory cache.
 
-### Modal provider fails
+### Backend route returns unauthorized
 
-Check:
-
-```env
-BOWIE_AI_PROVIDER=modal
-MODAL_OPENAI_BASE_URL=
-MODAL_API_KEY=
-```
-
-The backend normalizes `MODAL_OPENAI_BASE_URL` so it may include or omit `/v1`.
+If `BOWIE_API_SECRET` is set in the backend, set the same value in the frontend so proxy routes can send the bearer token.
 
 ### MCP tools fail
 
@@ -912,7 +635,12 @@ GET /api/mcp-schema
 
 If the live MCP server cannot be reached, the route returns local fallback tool names and descriptions.
 
+## Privacy and Retention
+
+Bowie stores operational traces only when Langfuse is configured. Normal traces are tagged for automatic deletion after 14 days. Conversations with negative feedback are retained for manual admin review because they identify answers that may be incorrect, unsafe, or unhelpful.
+
+Checkout data should be treated carefully. Bowie collects only the fields required to create a Kapruka checkout link, keeps hidden operational comments out of the visible UI, and blocks localized Unicode checkout fields from being sent directly to the order tool.
+
 ## Design Intent
 
-Bowie should feel like a practical Kapruka shopping guide rather than a generic chatbot. It should be warm, concise, and grounded in real tool results. It should never invent product names, prices, stock, delivery availability, checkout links, or tracking states. The backend enforces this through tool-first prompting, response sanitization, grounded search fallback, structured tool results, caching, and observability.
-
+Bowie should feel like a practical Kapruka shopping guide, not a generic chatbot. It should be warm, concise, multilingual, and grounded in real Kapruka tool results. It should never invent product names, prices, stock, delivery availability, checkout links, or tracking states.

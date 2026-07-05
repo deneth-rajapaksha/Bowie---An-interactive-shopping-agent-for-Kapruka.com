@@ -1,8 +1,11 @@
 @import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
 
 :root {
-  --bg-surface: #fcf9f8;
-  --bg-elevated: #ffffff;
+  --bg-main: #faf8f3;
+  --bg-sidebar: #f3f0ea;
+  --surface: #ffffff;
+  --bg-surface: var(--bg-main);
+  --bg-elevated: var(--surface);
   --bg-bowie: rgba(255, 255, 255, 0.8);
   --bg-user: #35106b;
   --text-primary: #2a1948;
@@ -98,7 +101,7 @@ a {
   padding: 0;
   background:
     radial-gradient(circle at 72% 82%, rgba(255, 212, 0, 0.18), rgba(255, 212, 0, 0) 28%),
-    linear-gradient(90deg, rgba(246, 243, 242, 0.82) 0%, rgba(252, 249, 248, 0.96) 46%, #fffdf7 100%),
+    linear-gradient(90deg, rgba(243, 240, 234, 0.82) 0%, rgba(250, 248, 243, 0.96) 46%, var(--bg-main) 100%),
     var(--bg-surface);
 }
 
@@ -376,7 +379,7 @@ a {
   min-height: 0;
   padding: 24px 16px;
   border-right: 1px solid rgba(204, 195, 210, 0.22);
-  background: #f6f3f2;
+  background: var(--bg-sidebar);
   overflow: hidden;
 }
 
@@ -845,7 +848,7 @@ a {
 .input-panel {
   border-top: 0;
   padding: 12px 16px 24px;
-  background: linear-gradient(0deg, var(--bg-surface) 0%, rgba(252, 249, 248, 0.96) 70%, rgba(252, 249, 248, 0) 100%);
+  background: linear-gradient(0deg, var(--bg-surface) 0%, rgba(250, 248, 243, 0.96) 70%, rgba(250, 248, 243, 0) 100%);
 }
 
 [data-theme="dark"] .input-panel {
